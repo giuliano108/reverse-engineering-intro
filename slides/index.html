@@ -1,0 +1,1748 @@
+<!DOCTYPE html>
+
+<meta charset="utf-8">
+<title>Binary Reverse Engineering</title>
+
+<!-- Slides -->
+
+<section class="chapter">
+    <h1>Binary<br><strong>R</strong>everse <strong>E</strong>ngineering</h1>
+    <footer>
+        <a href="https://github.com/giuliano108/reverse-engineering-intro">https://github.com/giuliano108/reverse-engineering-intro</a><br>
+        &rarr;, &darr; next step/slide <span class="footerbullet">&bullet;</span class="footerbullet"> &uarr; previous step/slide <span class="footerbullet">&bullet;</span class="footerbullet"> &larr; previous slide</footer>
+</section>
+
+<section>
+    <h2>Types of binaries</h2>
+    <ul>
+        <li class="next"><strong>Executable files</strong> output by a compiler/linker:<br>Mach-O (Apple), ELF (Bell Labs), PE (Microsoft), &hellip;</li>
+        <li class="next"><strong>Bytecode</strong> meant to be executed by a Virtual Machine: .class (Java), .pyc (Python), &hellip;</li>
+    </ul>
+</section>
+
+<section>
+    <h2>Why?</h2>
+    <ul>
+        <li class="next">What the code does, when the source is not available.</li>
+        <li class="next">How a malicious user could take advantage of our code.</li>
+        <li class="next">Better protect the secrets: API keys, tokens, &hellip;</li>
+    </ul>
+</section>
+
+<section>
+    <h2>Is <strong>RE</strong> legal?</h2>
+    <ul>
+        <li class="next">It usually is as long as:</li>
+        <ul>
+            <li class="next">you <strong>own</strong> the software</li>
+            <li class="next">you are reversing it to achieve <strong>interoperability</strong></li>
+        </ul>
+    </ul>
+</section>
+
+<section>
+    <div style="display:flex;justify-content:center;align-items:center;height:600px;">
+        <img src="images/reverse-engineering_o_873999.jpg" alt="raptor"/>
+    </div>
+</section>
+
+<section>
+    <h2>Our target</h2>
+    <img style="max-width: 500px;" src="images/crackmeapp.png" alt="crackme app"/>
+    <pre><code class="console">$ file CrackMe.app/Contents/MacOS/CrackMe
+CrackMe.app/Contents/MacOS/CrackMe: Mach-O 64-bit executable x86_64
+$ sw_vers -productVersion
+10.12.4  # macOS Sierra</code></pre>
+</section>
+
+<section>
+    <h2>What's in an <strong>Mach-O</strong> executable file</h2>
+    <img style="margin-top: 30px; max-height: 400px;" src="images/executable_mach_o_file_img_1.svg" alt="mach-o binary format"/>
+</section>
+
+<section>
+    <h2>What's in an <strong>Mach-O</strong> executable file</h2>
+    <pre style="font-size: 1rem;"><code class="console">$ otool -l CrackMe.app/Contents/MacOS/CrackMe  | grep -i segment -A3
+      cmd LC_SEGMENT_64
+  cmdsize 72
+  segname __PAGEZERO
+   vmaddr 0x0000000000000000
+--
+      cmd LC_SEGMENT_64
+  cmdsize 1112
+  segname __TEXT
+   vmaddr 0x0000000100000000
+--
+      cmd LC_SEGMENT_64
+  cmdsize 1272
+  segname __DATA
+   vmaddr 0x0000000100005000
+--
+      cmd LC_SEGMENT_64
+  cmdsize 72
+  segname __LINKEDIT
+   vmaddr 0x0000000100007000
+$</code></pre>
+</section>
+
+<section>
+    <h2>What's in an executable file</h2>
+    <ul>
+        <li class="next">Kernel loads segments into memory.</li>
+        <li class="next">It passes control to the <strong>d</strong>ynamic <strong>l</strong>inker.</li>
+        <li class="next">The <strong>dl</strong> finds and loads libraries.</li>
+        <li class="next">Jump to the program entry point.</li>
+    </ul>
+</section>
+
+<section>
+    <h2>Process address space</h2>
+    <ul>
+        <li class="next">The memory layout is <i>virtual</i>.</li>
+        <li class="next">Processes think they are alone on the system, with all the memory available to themselves.</li>
+        <li class="next">The <strong>m</strong>emory <strong>m</strong>anagement <strong>u</strong>nit takes care of mapping virtual pages of memory to physical ones.</li>
+    </ul>
+</section>
+
+<section>
+    <h2>Back to the target</h2>
+    <p class="notopmargin">How would the validation work?</p>
+    <img class="next" style="margin-top: 30px; margin-bottom: 30px; max-width: 500px;" src="images/validate.svg" alt="hypothetical validate function"/>
+    <pre class="next"><code class="console">$ strings CrackMe.app/Contents/MacOS/CrackMe
+[..]
+email address is invalid
+invalid licence code
+thanks for registering
+[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}
+[..]</code></pre>
+</section>
+
+<section>
+    <h2>Run the target under a debugger</h2>
+    <pre><code class="console">$ <mark>lldb CrackMe.app/Contents/MacOS/CrackMe</mark>
+(lldb) <mark>process launch --stop-at-entry</mark>
+Process 97427 stopped
+* thread #1: tid = 0x8d1bc4, 0x000000010000d000 dyld`_dyld_start, stop reason = signal SIGSTOP
+    frame #0: 0x000000010000d000 <mark>dyld`_dyld_start</mark>
+dyld`_dyld_start:
+-&gt;  0x10000d000 &lt;+0&gt;: popq   %rdi
+    0x10000d001 &lt;+1&gt;: pushq  $0x0
+    0x10000d003 &lt;+3&gt;: movq   %rsp, %rbp
+    0x10000d006 &lt;+6&gt;: andq   $-0x10, %rsp
+Process 97427 launched: '/Users/gcioffi/Documents/code/binary-re-intro/CrackMe.app/Contents/MacOS/CrackMe' (x86_64)
+(lldb) <mark>settings set target.x86-disassembly-flavor intel</mark>
+(lldb)</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">launch <strong>lldb</strong></p>
+    <p class="notopmargin next annotation" data-annotation="2">stop at the entry point</p>
+    <p class="notopmargin next annotation" data-annotation="3">we land somewhere in the dynamic linker code</p>
+    <p class="notopmargin next annotation" data-annotation="4">change disassembly syntax format</p>
+</section>
+
+<section>
+    <h2>Target address space</h2>
+    <pre><code class="console">(lldb) <mark>target modules list</mark>
+[  0] 37E07D4F-8E26-3B11-B792-6E2AA02B515B CrackMe[<mark>0x0000000100000000</mark>] /Users/gcioffi/Documents/code/binary-re-intro/CrackMe.app/Contents/MacOS/CrackMe
+[  1] 8239D0D7-66F6-3C44-A77F-586F74525DA3 0x000000010000c000 /usr/lib/dyld
+[  2] 49C8DA40-9E5B-33F9-B092-F50115B59E95 Foundation[0x0000000000000000] /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation
+[..]
+[204] 9660B91D-0C39-385A-96CB-268345035995 libCoreVMClient.dylib[<mark>0x0000000000000000</mark>] /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libCoreVMClient.dylib
+(lldb)</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">gives a list of all the external modules (to be) loaded in the process address space</p>
+    <p class="notopmargin next annotation" data-annotation="2">virtual memory address</p>
+    <p class="notopmargin next annotation" data-annotation="3">if the address is 0x0, the module hasn't been loaded yet</p>
+</section>
+
+<section>
+    <h2>Target sections</h2>
+    <pre style="max-height: 350px;"><code class="console">(lldb) <mark>target modules dump sections CrackMe</mark>
+Sections for '/Users/gcioffi/Documents/code/binary-re-intro/CrackMe.app/Contents/MacOS/CrackMe' (x86_64):
+  SectID     Type             Load Address                             Perm File Off.  File Size  Flags      Section Name
+  ---------- ---------------- ---------------------------------------  ---- ---------- ---------- ---------- ----------------------------
+  0x00000100 container        [0x0000000000000000-0x0000000100000000)* ---  0x00000000 0x00000000 0x00000000 CrackMe.__PAGEZERO
+  0x00000200 container        [<mark>0x0000000100000000</mark>-0x0000000100005000)* r-x  0x00000000 0x00005000 0x00000000 CrackMe.__TEXT
+  0x00000001 code             [0x0000000100001f00-0x000000010000390a)* r-x  0x00001f00 0x00001a0a 0x80000400 CrackMe.__TEXT.__text
+  0x00000002 code             [0x000000010000390a-0x0000000100003a0c)* r-x  0x0000390a 0x00000102 0x80000408 CrackMe.__TEXT.__stubs
+  0x00000003 code             [0x0000000100003a0c-0x0000000100003bca)* r-x  0x00003a0c 0x000001be 0x80000400 CrackMe.__TEXT.__stub_helper
+  0x00000004 data-cstr        [0x0000000100003bd0-0x00000001000042ba)* r-x  0x00003bd0 0x000006ea 0x00000002 CrackMe.__TEXT.__cstring
+  0x00000005 regular          [0x00000001000042c0-0x00000001000043fa)* r-x  0x000042c0 0x0000013a 0x00000000 CrackMe.__TEXT.__const
+  0x00000006 data-cstr        [0x00000001000043fa-0x0000000100004b26)* r-x  0x000043fa 0x0000072c 0x00000002 CrackMe.__TEXT.__objc_methname
+  0x00000007 regular          [0x0000000100004b30-0x0000000100004c7a)* r-x  0x00004b30 0x0000014a 0x00000000 CrackMe.__TEXT.__swift3_typeref
+  0x00000008 regular          [0x0000000100004c80-0x0000000100004cc3)* r-x  0x00004c80 0x00000043 0x00000000 CrackMe.__TEXT.__swift3_reflstr
+  0x00000009 regular          [0x0000000100004cc4-0x0000000100004d18)* r-x  0x00004cc4 0x00000054 0x00000000 CrackMe.__TEXT.__swift3_fieldmd
+  0x0000000a regular          [0x0000000100004d18-0x0000000100004d60)* r-x  0x00004d18 0x00000048 0x00000000 CrackMe.__TEXT.__swift3_assocty
+  0x0000000b regular          [0x0000000100004d60-0x0000000100004da4)* r-x  0x00004d60 0x00000044 0x00000000 CrackMe.__TEXT.__swift3_capture
+  0x0000000c compact-unwind   [0x0000000100004da4-0x0000000100004ea8)* r-x  0x00004da4 0x00000104 0x00000000 CrackMe.__TEXT.__unwind_info
+  0x0000000d eh-frame         [0x0000000100004ea8-0x0000000100004ff8)* r-x  0x00004ea8 0x00000150 0x00000000 CrackMe.__TEXT.__eh_frame
+  0x00000300 container        [0x0000000100005000-0x0000000100007000)* rw-  0x00005000 0x00002000 0x00000000 CrackMe.__DATA
+  0x0000000e data-ptrs        [0x0000000100005000-0x0000000100005010)* rw-  0x00005000 0x00000010 0x00000006 CrackMe.__DATA.__nl_symbol_ptr
+  0x0000000f data-ptrs        [0x0000000100005010-0x00000001000050b0)* rw-  0x00005010 0x000000a0 0x00000006 CrackMe.__DATA.__got
+  0x00000010 data-ptrs        [0x00000001000050b0-0x0000000100005208)* rw-  0x000050b0 0x00000158 0x00000007 CrackMe.__DATA.__la_symbol_ptr
+  0x00000011 regular          [0x0000000100005210-0x0000000100005268)* rw-  0x00005210 0x00000058 0x00000000 CrackMe.__DATA.__const
+  0x00000012 data-ptrs        [0x0000000100005268-0x0000000100005270)* rw-  0x00005268 0x00000008 0x10000000 CrackMe.__DATA.__objc_classlist
+  0x00000013 regular          [0x0000000100005270-0x0000000100005288)* rw-  0x00005270 0x00000018 0x00000000 CrackMe.__DATA.__objc_protolist
+  0x00000014 regular          [0x0000000100005288-0x0000000100005290)* rw-  0x00005288 0x00000008 0x00000000 CrackMe.__DATA.__objc_imageinfo
+  0x00000015 data-ptrs        [0x0000000100005290-0x0000000100005f80)* rw-  0x00005290 0x00000cf0 0x00000000 CrackMe.__DATA.__objc_const
+  0x00000016 data-cstr-ptr    [0x0000000100005f80-0x0000000100005fa8)* rw-  0x00005f80 0x00000028 0x10000005 CrackMe.__DATA.__objc_selrefs
+  0x00000017 regular          [0x0000000100005fa8-0x0000000100005fc0)* rw-  0x00005fa8 0x00000018 0x00000000 CrackMe.__DATA.__objc_protorefs
+  0x00000018 data-ptrs        [0x0000000100005fc0-0x0000000100005fd8)* rw-  0x00005fc0 0x00000018 0x10000000 CrackMe.__DATA.__objc_classrefs
+  0x00000019 data-ptrs        [0x0000000100005fd8-0x00000001000060f8)* rw-  0x00005fd8 0x00000120 0x00000000 CrackMe.__DATA.__objc_data
+  0x0000001a data             [0x00000001000060f8-0x0000000100006200)* rw-  0x000060f8 0x00000108 0x00000000 CrackMe.__DATA.__data
+  0x0000001b zero-fill        [0x0000000100006200-0x0000000100006208)* rw-  0x00000000 0x00000000 0x00000001 CrackMe.__DATA.__common
+  0x0000001c zero-fill        [0x0000000100006208-<mark>0x0000000100006210</mark>)* rw-  0x00000000 0x00000000 0x00000001 CrackMe.__DATA.__bss
+  0x00000400 container        [0x0000000100007000-0x000000010000c000)* r--  0x00007000 0x000043c0 0x00000000 CrackMe.__LINKEDIT
+(lldb)</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">only show the sections belonging to the <strong>CrackMe</strong> file</p>
+    <p class="notopmargin next annotation" data-annotation="2">crackMe code and data seem to have been loaded in mem starting at offset <strong>0x100000000</strong>&hellip;</p>
+    <p class="notopmargin next annotation" data-annotation="3">...and ending at offset <strong>0x100006210</strong></p>
+    <p class="notopmargin next annotation" data-annotation="4">How do we narrow down the search?</p>
+</section>
+
+<section>
+    <h2>Look for the error message</h2>
+    <p class="notopmargin">Can we find the error message in the identified memory range?</p>
+    <pre><code class="console">(lldb) memory find -s 'invalid licence' 0x0000000100000000 0x0000000100006210
+data found at location: <mark>0x100003d50</mark>
+0x100003d50: 69 6e 76 61 6c 69 64 20 6c 69 63 65 6e 63 65 20  invalid licence
+0x100003d60: 63 6f 64 65 00 00 00 00 00 00 00 00 00 00 00 00  code............
+(lldb)</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">yes!</p>
+</section>
+
+<section>
+    <h2>Add a breakpoint on memory read</h2>
+    <pre style="max-height: 350px;"><code class="console">(lldb) <mark>watchpoint set expression -w read -s 1 -- 0x100003d50</mark>
+Watchpoint created: Watchpoint 1: addr = 0x100003d50 size = 1 state = enabled type = r
+    new value: 2334106421097295465
+(lldb) <mark>c</mark>
+Process 16448 resuming
+
+Watchpoint 1 hit:
+old value: 2334106421097295465
+new value: 2334106421097295465
+Process 16448 stopped
+* thread #1: tid = 0x94c9dc, 0x00000001002dc177 <mark>libswiftCore.dylib</mark>;`function signature specialization &lt;preserving fragile attribute, Arg[3] = Dead&gt; of generic specialization &lt;preserving fragile attribute, Swift.UInt8 with Swift.UInt8 : Swift._StringElement in Swift, Swift.UInt16 with Swift.UInt16 : Swift._StringElement in Swift&gt; of static Swift.UTF16._copy &lt;A, B where A: Swift._StringElement, B: Swift._StringElement&gt; (source : Swift.UnsafeMutablePointer&lt;A&gt;, destination : Swift.UnsafeMutablePointer&lt;B&gt;, count : Swift.Int) -&gt; () + 55, queue = 'com.apple.main-thread', stop reason = watchpoint 1
+    frame #0: 0x00000001002dc177 libswiftCore.dylib`function signature specialization &lt;preserving fragile attribute, Arg[3] = Dead&gt; of generic specialization &lt;preserving fragile attribute, Swift.UInt8 with Swift.UInt8 : Swift._StringElement in Swift, Swift.UInt16 with Swift.UInt16 : Swift._StringElement in Swift&gt; of static Swift.UTF16._copy &lt;A, B where A: Swift._StringElement, B: Swift._StringElement&gt; (source : Swift.UnsafeMutablePointer&lt;A&gt;, destination : Swift.UnsafeMutablePointer&lt;B&gt;, count : Swift.Int) -&gt; () + 55
+libswiftCore.dylib`function signature specialization &lt;preserving fragile attribute, Arg[3] = Dead&gt; of generic specialization &lt;preserving fragile attribute, Swift.UInt8 with Swift.UInt8 : Swift._StringElement in Swift, Swift.UInt16 with Swift.UInt16 : Swift._StringElement in Swift&gt; of static Swift.UTF16._copy &lt;A, B where A: Swift._StringElement, B: Swift._StringElement&gt; (source : Swift.UnsafeMutablePointer&lt;A&gt;, destination : Swift.UnsafeMutablePointer&lt;B&gt;, count : Swift.Int) -&gt; ():
+-&gt;  0x1002dc177 &lt;+55&gt;: mov    word ptr [rsi + 2*r8], ax
+    0x1002dc17c &lt;+60&gt;: cmp    rcx, rdx
+    0x1002dc17f &lt;+63&gt;: mov    r8, rcx
+    0x1002dc182 &lt;+66&gt;: jne    0x1002dc160               ; &lt;+32&gt;
+(lldb)</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">set the watchpoint to the location of the "invalid code" message</p>
+    <p class="notopmargin next annotation" data-annotation="2">continue and input a random email and key in the CrackMe app</p>
+    <p class="notopmargin next annotation" data-annotation="3">the watchpoint triggers, somewhere deep in a Swift library</p>
+</section>
+
+<section>
+    <h2>Backtrace</h2>
+    <pre style="max-height: 350px;"><code class="console">(lldb) bt 10
+* thread #1: tid = 0x989de1, 0x00000001002dc177 libswiftCore.dylib`function signature specialization &lt;preserving fragile attribute, Arg[3] = Dead&gt; of generic specialization &lt;preserving fragile attribute, Swift.UInt8 with Swift.UInt8 : Swift._StringElement in Swift, Swift.UInt16 with Swift.UInt16 : Swift._StringElement in Swift&gt; of static Swift.UTF16._copy &lt;A, B where A: Swift._StringElement, B: Swift._StringElement&gt; (source : Swift.UnsafeMutablePointer&lt;A&gt;, destination : Swift.UnsafeMutablePointer&lt;B&gt;, count : Swift.Int) -&gt; () + 55, queue = 'com.apple.main-thread', stop reason = watchpoint 1
+  * frame #0: 0x00000001002dc177 libswiftCore.dylib`function signature specialization &lt;preserving fragile attribute, Arg[3] = Dead&gt; of generic specialization &lt;preserving fragile attribute, Swift.UInt8 with Swift.UInt8 : Swift._StringElement in Swift, Swift.UInt16 with Swift.UInt16 : Swift._StringElement in Swift&gt; of static Swift.UTF16._copy &lt;A, B where A: Swift._StringElement, B: Swift._StringElement&gt; (source : Swift.UnsafeMutablePointer&lt;A&gt;, destination : Swift.UnsafeMutablePointer&lt;B&gt;, count : Swift.Int) -&gt; () + 55
+    frame #1: 0x00007fffcc7d03e9 Foundation`-[NSPlaceholderString initWithString:] + 243
+    frame #2: 0x00007fffc888220d AppKit`-[NSCell _objectValue:forString:errorDescription:] + 289
+    frame #3: 0x00007fffc8882042 AppKit`-[NSCell setStringValue:] + 41
+    frame #4: 0x00007fffc8930cee AppKit`-[NSControl setStringValue:] + 135
+    frame #5: <mark>0x00000001000025e4</mark> CrackMe`___lldb_unnamed_symbol14$$CrackMe + 612
+    frame #6: 0x00000001000026c7 CrackMe`___lldb_unnamed_symbol15$$CrackMe + 151
+    frame #7: 0x00007fffe06ed3a7 libsystem_trace.dylib`_os_activity_initiate_impl + 53
+    frame #8: 0x00007fffc8fd2791 AppKit`-[NSApplication(NSResponder) sendAction:to:from:] + 456
+    frame #9: 0x00007fffc8ab7000 AppKit`-[NSControl sendAction:to:] + 86
+(lldb) watchpoint disable
+All watchpoints disabled. (1 watchpoints)
+(lldb) <mark>b 0x1000025e4</mark>
+Breakpoint 1: where = CrackMe`___lldb_unnamed_symbol14$$CrackMe + 612, address = 0x00000001000025e4
+(lldb) <mark>c</mark></code></pre>
+    <p class="notopmargin next annotation" data-annotation="1"><strong>0x1000025e4</strong> is the address we'll eventually return to</p>
+    <p class="notopmargin next annotation" data-annotation="2">set a breakpoint there and try the same email/key combo again</p>
+    <p class="notopmargin next annotation" data-annotation="3">continue&hellip;</p>
+</section>
+
+<section>
+    <h2>Getting close</h2>
+    <pre style="max-height: 350px;"><code class="console">(lldb) <mark>di -f</mark>
+CrackMe`___lldb_unnamed_symbol14$$CrackMe:
+    0x100002380 &lt;+0&gt;:   push   rbp
+    0x100002381 &lt;+1&gt;:   mov    rbp, rsp
+    0x100002384 &lt;+4&gt;:   push   r15
+[..]
+    0x1000025b7 &lt;+567&gt;: call   0x100003922               ; symbol stub for: objc_retain
+    0x1000025bc &lt;+572&gt;: <mark>lea    rdi, [rip + 0x178d]</mark>       ; "invalid licence code"
+    0x1000025c3 &lt;+579&gt;: mov    esi, 0x14
+    0x1000025c8 &lt;+584&gt;: xor    edx, edx
+    0x1000025ca &lt;+586&gt;: <mark>call   0x1000039d6</mark>               ; symbol stub for: (extension in Foundation):Swift.String._bridgeToObjectiveC () -&gt; __ObjC.NSString
+    0x1000025cf &lt;+591&gt;: mov    r14, rax
+    0x1000025d2 &lt;+594&gt;: mov    rsi, qword ptr [rip + 0x39b7] ; "setStringValue:"
+    0x1000025d9 &lt;+601&gt;: mov    rdi, rbx
+    0x1000025dc &lt;+604&gt;: mov    rdx, r14
+    0x1000025df &lt;+607&gt;: <mark>call   0x100003910</mark>               ; symbol stub for: objc_msgSend
+-&gt;  0x1000025e4 &lt;+612&gt;: mov    rdi, rbx
+[..]</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">disassemble the current frame (the current function)</p>
+    <p class="notopmargin next annotation" data-annotation="2">this is our "invalid…" message!</p>
+    <p class="notopmargin next annotation" data-annotation="3">converts a Swift string to an ObjC string?</p>
+    <p class="notopmargin next annotation" data-annotation="4">display the message on screen?</p>
+    <p class="notopmargin next annotation" data-annotation="2">remember the "invalid&hellip;" message is loaded somewhere around <strong>&lt;+572&gt;</strong></p>
+</section>
+
+<section>
+    <h2>Look further up in the disassembly</h2>
+    <pre style="max-height: 350px;"><code class="console">    0x100002559 &lt;+473&gt;: <mark>cmp    byte ptr [rbp - 0x50], 0x0</mark>
+    0x10000255d &lt;+477&gt;: je     0x1000025af               ; <mark>&lt;+559&gt;</mark>
+    0x10000255f &lt;+479&gt;: test   rbx, rbx
+    0x100002562 &lt;+482&gt;: je     0x100002623               ; &lt;+675&gt;
+    0x100002568 &lt;+488&gt;: mov    rdi, rbx
+    0x10000256b &lt;+491&gt;: call   0x100003922               ; symbol stub for: objc_retain
+    0x100002570 &lt;+496&gt;: <mark>lea    rdi, [rip + 0x17f9]       ; "thanks for registering"</mark>
+    0x100002577 &lt;+503&gt;: mov    esi, 0x16
+    0x10000257c &lt;+508&gt;: jmp    0x1000025c8               ; &lt;+584&gt;
+    0x10000257e &lt;+510&gt;: add    r13, qword ptr [rip + 0x3bb3]
+    0x100002585 &lt;+517&gt;: mov    rdi, r13
+    0x100002588 &lt;+520&gt;: call   0x1000039be               ; symbol stub for: swift_unknownWeakLoadStrong
+    0x10000258d &lt;+525&gt;: mov    rbx, rax
+    0x100002590 &lt;+528&gt;: test   rbx, rbx
+    0x100002593 &lt;+531&gt;: je     0x100002621               ; &lt;+673&gt;
+    0x100002599 &lt;+537&gt;: mov    rdi, rbx
+    0x10000259c &lt;+540&gt;: call   0x100003922               ; symbol stub for: objc_retain
+    0x1000025a1 &lt;+545&gt;: lea    rdi, [rip + 0x1788]       ; "email address is invalid"
+    0x1000025a8 &lt;+552&gt;: mov    esi, 0x18
+    0x1000025ad &lt;+557&gt;: jmp    0x1000025c8               ; &lt;+584&gt;
+    0x1000025af &lt;+559&gt;: test   rbx, rbx
+    0x1000025b2 &lt;+562&gt;: je     0x100002625               ; <mark>&lt;+677&gt;</mark>
+    0x1000025b4 &lt;+564&gt;: mov    rdi, rbx
+    0x1000025b7 &lt;+567&gt;: call   0x100003922               ; symbol stub for: objc_retain
+    0x1000025bc &lt;+572&gt;: lea    rdi, [rip + 0x178d]       ; "invalid licence code"</code></pre>
+    <p class="notopmargin next annotation" data-annotation="4">look at all the jump targets trying to find one that's slightly before <strong>&lt;+572&gt;</strong></p>
+    <p class="notopmargin next annotation" data-annotation="3">need to convince the code to get to here!</p>
+    <p class="notopmargin next annotation" data-annotation="2">this is reasonably close to <strong>&lt;+572&gt;</strong></p>
+    <p class="notopmargin next annotation" data-annotation="1">if <strong>*((uint8_t *)(rpb - 0x50)) == 0</strong>, jump</p>
+</section>
+
+<section>
+    <h2>The <strong>validate(email,key)</strong> call?</h2>
+    <pre style="max-height: 350px;"><code class="console">    0x1000024f0 <+368>: lea    rsi, [r12 + 0x20]
+    0x1000024f5 <+373>: mov    rdi, qword ptr [rbp - 0x50]
+    <mark>0x1000024f9</mark> <+377>: call   0x100001f00               ; ___lldb_unnamed_symbol1$$CrackMe
+    0x1000024fe <+382>: mov    byte ptr [rbp - 0x50], al
+[..]
+    0x100002559 <+473>: cmp    byte ptr [rbp - 0x50], 0x0
+    0x10000255d <+477>: je     0x1000025af               ; <+559>
+[..]
+    0x1000025af <+559>: test   rbx, rbx
+    0x1000025b2 <+562>: je     0x100002625               ; <+677>
+    0x1000025b4 <+564>: mov    rdi, rbx
+    0x1000025b7 <+567>: call   0x100003922               ; symbol stub for: objc_retain
+    0x1000025bc <+572>: lea    rdi, [rip + 0x178d]       ; "invalid licence code"
+(lldb) breakpoint delete                                                                                                                      About to delete all breakpoints, do you want to do that?: [Y/n] Y
+All breakpoints removed. (1 breakpoint)
+(lldb) b 0x1000024f9
+Breakpoint 6: where = CrackMe`___lldb_unnamed_symbol14$$CrackMe + 377, address = 0x00000001000024f9
+(lldb) c
+Process 25670 resuming</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">place breakpoint here</p>
+</section>
+
+<section>
+    <h2>Look around</h2>
+    <pre style="max-height: 350px;"><code class="console">    0x1000024da <+346>: mov    rsi, r12
+    0x1000024dd <+349>: mov    rdx, r14
+    0x1000024e0 <+352>: call   0x100002980               ; ___lldb_unnamed_symbol22$$CrackMe
+    0x1000024e5 <+357>: mov    r12, rax
+    0x1000024e8 <+360>: mov    rdi, r14
+    0x1000024eb <+363>: call   0x1000039a0               ; symbol stub for: swift_unknownRelease
+    0x1000024f0 <+368>: lea    rsi, [r12 + 0x20]
+    0x1000024f5 <+373>: mov    rdi, qword ptr [rbp - 0x50]
+->  0x1000024f9 <+377>: <mark>call   0x100001f00</mark>               ; ___lldb_unnamed_symbol1$$CrackMe
+    0x1000024fe <+382>: mov    byte ptr [rbp - 0x50], <mark>al</mark>
+(lldb) expression -f p -- (char*)<mark>$rdi</mark>
+(char *) $75 = 0x0000000100d3d120 "a@b.com"
+(lldb) expression -f p -- (char*)$rsi
+(char *) $76 = 0x0000000100d23d40 "54321"
+</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">no function parameters are being <strong>push</strong>ed onto the stack</p>
+    <p class="notopmargin next annotation" data-annotation="3">email and key are passed to the <strong>call</strong> using the registers</p>
+    <p class="notopmargin next annotation" data-annotation="2">and this must be the "key is valid" boolean</p>
+</section>
+
+<section>
+    <h2>The registered/not registered branch</h2>
+    <pre style="max-height: 350px;"><code class="console">(lldb) di -f <mark>-b</mark>
+    0x100002559 <+473>: 80 7d b0 <mark>00</mark> cmp    byte ptr [rbp - 0x50], 0x0
+    0x10000255d <+477>: 74 50       je     0x1000025af               ; <+559></code></pre>
+    <p class="notopmargin next annotation" data-annotation="1"><strong>-b</strong> also shows the opcodes</p>
+    <p class="notopmargin next annotation" data-annotation="2">the <strong>0x0</strong> constant is stored here</p>
+</section>
+
+<section>
+    <h2>Patch the binary</h2>
+    <pre style="max-height: 350px;"><code class="console">$ bbe -s -b '/\x80\x7d\xb0\x00/:6' \
+      -e 'p H' -e 'A \n' \
+      CrackMe.app/Contents/MacOS/CrackMe
+<mark>x80 x7d xb0 x00</mark> x74 x50
+$ bbe -b '/\x80\x7d\xb0\x00/:6' \
+      -e 's/\x00/<mark>\x01</mark>/' \
+      -o CrackMe.app/Contents/MacOS/CrackMeCracked \
+      CrackMe.app/Contents/MacOS/CrackMe
+$ <mark>CrackMe.app/Contents/MacOS/CrackMeCracked</mark>
+$</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1">the disassembled instruction we saw before, it occurs only once in the whole binary</p>
+    <p class="notopmargin next annotation" data-annotation="2">flip a bit</p>
+    <p class="notopmargin next annotation" data-annotation="3">thanks for registering!</p>
+</section>
+
+<section class="chapter">
+    <h1><strong>Key</strong> <strong>Gen</strong>erator</h1>
+</section>
+
+<section>
+    <div style="margin-left: 4rem; float: left; margin-right: 4rem;">
+        <img style="max-height: 550px; padding-top: 40px;" src="images/cfg.svg" alt="Control Flow Graph"/>
+    </div>
+    <div>
+        <h2>Key Validation</h2>
+        <ul>
+            <li class="next"><strong>0x100001f00</strong>, a.k.a.<br><strong>ƒ(email, key) → bool</strong></li>
+            <li class="next">330 bytes, 99 asm instructions</li>
+            <li class="next">What can we guess by looking at the <strong>C</strong>ontrol <strong>F</strong>low <strong>G</strong>raph on the left?</li>
+        </ul>
+    </div>
+</section>
+
+<section>
+    <h2>Assembly</h2>
+    <pre style="max-height: 350px;"><code class="x86asm">0x100001f26 lea  rdx, qword [rbp+var_30]      ; argument "md" for method imp___stubs__CC_MD5
+0x100001f2a mov  rdi, rbx                     ; argument "data" for method imp___stubs__CC_MD5
+0x100001f2d mov  esi, eax                     ; argument "len" for method imp___stubs__CC_MD5
+0x100001f2f call imp___stubs__CC_MD5
+0x100001f34 mov  r9d, dword [rbp+var_30]
+0x100001f38 lea  r8, qword [0x100003bd0]      ; "%u", argument #5 for method imp___stubs____snprintf_chk
+0x100001f3f xor  ebx, ebx
+0x100001f41 lea  rdi, qword [rbp+var_50]      ; argument #1 for method imp___stubs____snprintf_chk
+0x100001f45 mov  esi, 0x14                    ; argument #2 for method imp___stubs____snprintf_chk
+0x100001f4a mov  edx, 0x0                     ; argument #3 for method imp___stubs____snprintf_chk
+0x100001f4f mov  ecx, 0x14                    ; argument #4 for method imp___stubs____snprintf_chk
+0x100001f54 xor  eax, eax
+0x100001f56 call imp___stubs____snprintf_chk
+0x100001f5b mov  rdi, r14                     ; argument "s" for method imp___stubs__strlen
+0x100001f5e call imp___stubs__strlen
+0x100001f63 cmp  rax, 0x18
+0x100001f67 jne  loc_100002037</code></pre>
+    <p class="notopmargin">The first rectangle in the <strong>CFG</strong></p>
+</section>
+
+<section>
+    <h2>Assembly decompiled to C</h2>
+    <pre style="max-height: 350px;"><code class="cpp">int sub_100001f00(int <mark data-annotation="1">arg0</mark>, int <mark data-annotation="2">arg1</mark>) {
+    <mark data-annotation="2">r14</mark> = <mark data-annotation="2">arg1</mark>;
+    var_20 = *___stack_chk_guard;
+    // (lldb) expr (char*)$rdi \n (char *) $9 = 0x0000000100a90950 "a@b.com" 
+    <mark data-annotation="3">CC_MD5</mark>(<mark data-annotation="1">arg0</mark>, strlen(<mark data-annotation="1">arg0</mark>), <mark data-annotation="4">var_30</mark>);
+    // (lldb) memory read -f h -s 4 -- '$rbp - 0x30'
+    // 0x7fff5fbfb660: <mark data-annotation="8"><mark data-annotation="7">0xe8207a35</mark> 0xd6696ec5 0x234d73f9 0xe81795ef</mark>
+    rbx = 0x0;
+    __snprintf_chk(<mark data-annotation="5">var_50</mark>, 0x14, 0x0, 0x14,
+                   "%u", var_30);
+    // (lldb) p (char*)($rbp - 0x50)
+    // (char *) $29 = 0x00007fff5fbfe220 "<mark data-annotation="7">3894442549</mark>"
+    if (strlen(<mark data-annotation="2">r14</mark>) != <mark data-annotation="6">0x18</mark>) goto <mark data-annotation="9">loc_100002037</mark>;</code></pre>
+    <p class="notopmargin next annotation" data-annotation="3" data-byid="true">Apple CommonCrypto MD5</p>
+    <p class="notopmargin next annotation" data-annotation="2" data-byid="true"><strong>key</strong> &mdash; it's not an <strong>int</strong>, it's a <strong>char*</strong> but the decompiler couldn't tell</p>
+    <p class="notopmargin next annotation" data-annotation="6" data-byid="true">the <strong>key</strong> length must be 0x18 = <strong>24</strong> characters!</p>
+    <p class="notopmargin next annotation" data-annotation="9" data-byid="true">return <strong>false</strong> and exit</p>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true"><strong>email</strong>, it's being MD5-hashed</p>
+    <p class="notopmargin next annotation" data-annotation="4" data-byid="true">the hash (128 bits) is stored in <strong>var_30</strong></p>
+    <pre class="notopmargin next annotation" data-annotation="8" data-byid="true" style="margin-top: 10px; max-height: 100px;"><code class="console">$ echo -n a@b.com | md5
+357a20e8c56e69d6f9734d23ef9517e8</code></pre>
+    <p class="notopmargin next annotation" data-annotation="5" data-byid="true">the low 32 bits  of the hash are printed (as an unsigned integer) into <strong>var_50</strong></p>
+    <p class="notopmargin next annotation" data-annotation="7" data-byid="true">0xe8207a35 = <strong>3894442549</strong></p>
+    <pre class="notopmargin next annotation" data-annotation="10" data-byid="true" style="margin-top: -10px;">
+        <code class="python">    m = md5.new()
+    m.update(email)
+    digest = m.digest()
+    email_hash = struct.unpack('I', digest[0:4])[0]
+    return "%u" % email_hash</code></pre>
+</section>
+
+<section>
+    <h2><strong>Key</strong> start</h2>
+    <pre style="max-height: 350px;"><code class="cpp">// r14 = <strong>key</strong>
+// var_50 = md5(<strong>email</strong>), truncated and converted to string
+if (strncmp(r14, var_50, strlen(var_50)) != 0x0) goto loc_100002037;</code></pre>
+    <p class="notopmargin">The <strong>key</strong> must start with the truncated email hash</p>
+    <pre><code class="python">if not key.startswith(email_hash_string):
+    return False, 'must start with the email hash'</code></pre>
+</section>
+
+<section>
+    <h2>A for loop</h2>
+    <pre style="max-height: 350px;"><code class="cpp">// r14 = <strong>key</strong>
+<mark data-annotation="2">rbx = 0x0;</mark>
+<mark data-annotation="1">loc_100001f91</mark>:
+    rax = <mark data-annotation="3">*(int8_t *)(r14 + rbx) + 0xd0</mark>;
+    if ((rax & <mark data-annotation="3">0xff</mark>) > 0x9) goto loc_100002035;
+    *(int8_t *)(rbp + rbx - <mark data-annotation="4">112</mark>) = rax;
+    <mark data-annotation="2">rbx = rbx + 0x1</mark>;
+    if (<mark data-annotation="2">rbx < 0x18</mark>) goto <mark data-annotation="1">loc_100001f91</mark>;</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true"></p>
+    <p class="notopmargin next annotation" data-annotation="2" data-byid="true"><code>for(rbx=0; rbx&lt;24; rbx++) { &hellip; }</code></p>
+    <pre class="notopmargin next annotation" data-annotation="3" data-byid="true" style="margin-top: 10px;">
+        <code class="python">0xd0 == 208
+(key[rbx] + 208) % 256
+208 == 256 - ord('0')
+(ord('1') - 256 - ord('0')) % 256 == 1
+
+ord(key[rbx]) - ord('0') == int(key[rbx])</code></pre>
+    <ul class="notopmargin next annotation" data-annotation="4" data-byid="true">
+        <li>Convert every character in the <strong>key</strong> to a number.</li>
+        <li>Make sure <strong>0 &le; number &le; 9</strong>.</li>
+        <li>Store the digits in an array.</li>
+        <li>The array starts at <strong>rpb - 112</strong></li></ul>
+    <pre class="notopmargin next annotation" data-annotation="5" data-byid="true" style="margin-top: 10px;">
+        <code class="python">digits = []
+for c in key:
+    try:
+        digits.append(int(c))
+    except ValueError:
+        return False, 'must be numerical'</code>
+    </pre>
+</section>
+
+<section>
+    <h2>Checksum 1</h2>
+    <pre style="max-height: 350px;"><code class="cpp">rax = 0x0;
+rcx = 0x0;
+do {
+    rcx = rcx + (*(int8_t *)
+                  (rbp + rax - <mark data-annotation="1">102</mark>) & 0xff);
+    rax = rax + 0x1;
+} while (rax != 0x5);
+if (rcx == 0x15) {
+</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true">
+        From the previous slide we know that the digits array is based at <strong>rpb - 112</strong>.<br>
+        This loop starts at index <strong>10</strong>.
+    </p>
+    <pre class="notopmargin next annotation" data-annotation="2" data-byid="true" style="margin-top: 10px;">
+        <code class="python"># sum of digits at positions 10-14
+s = sum(digits[10:15])
+if s != 21:  # 0x15
+    return False, 'must contain a predetermined sum'</code></pre>
+</section>
+
+<section>
+    <h2>Checksum 2</h2>
+    <pre style="max-height: 350px;"><code class="cpp">rax = 0x1;
+rcx = 0x0;
+do {
+    rax = rax * (*(int8_t *)
+                  (rbp + rcx - <mark data-annotation="1">97</mark>) & 0xff);
+    rcx = rcx + 0x1;
+} while (rcx != 0x5);
+if (rax == 0x1e0) {</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true">
+        start at index <strong>15</strong>
+    </p>
+    <pre class="notopmargin next annotation" data-annotation="2" data-byid="true" style="margin-top: 10px;">
+        <code class="python"># product of digits at positions 15-19
+p = reduce(operator.mul, digits[15:20], 1)
+if p != 480:  # 0x1e0
+    return False, 'must contain a predetermined product'</code></pre>
+</section>
+
+<section>
+    <h2>Checksum 3</h2>
+    <pre style="max-height: 350px;"><code class="cpp">rbx = 0x0;
+rax = <mark data-annotation="1">0x0</mark>;
+do {
+    rbx = rbx + (*(int8_t *)(rbp + <mark data-annotation="1">rax - 112</mark>) & 0xff);
+    rax = rax + <mark data-annotation="3">0x2</mark>;
+} while (rax < <mark data-annotation="2">0x18</mark>);
+COND = (rbx & 0xf) != 0x3;
+rbx = 0x0;
+if (!COND) {</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true">
+        start at index <strong>0</strong>
+    </p>
+    <p class="notopmargin next annotation" data-annotation="2" data-byid="true">
+        visit all the digits in the array
+    </p>
+    <p class="notopmargin next annotation" data-annotation="3" data-byid="true">
+        at <strong>even</strong> indexes
+    </p>
+<pre class="notopmargin next annotation" data-annotation="4" data-byid="true" style="margin-top: 10px;">
+    <code class="python"># accumulate digits at even indexes
+acc = 0
+for i in xrange(0, len(digits), 2):
+    acc += digits[i]
+if acc % 16 != 3:
+    return False, 'sum of even index digits % 16 must be == 3'</code></pre>
+</section>
+
+<section>
+    <h2>Checksum 4</h2>
+    <pre style="max-height: 350px;"><code class="cpp">rax = 0x0;
+rcx = <mark data-annotation="1">0x1</mark>;
+do {
+    rax = rax + (*(int8_t *)(rbp + <mark data-annotation="1">rcx - 112</mark>) & 0xff);
+    rcx = rcx + 0x2;
+} while (rcx < 0x18);
+<mark data-annotation="3">rbx</mark> = (rax & 0xf) == 0x7 ? 0x1 : 0x0;
+</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true">
+        start at index <strong>1</strong>, visit all the digits at <strong>odd</strong> indexes
+    </p>
+<pre class="notopmargin next annotation" data-annotation="2" data-byid="true" style="margin-top: 10px;">
+    <code class="python"># accumulate digits at odd indexes
+acc = 0
+for i in xrange(1, len(digits), 2):
+    acc += digits[i]
+if acc % 16 != 7:
+    return False, 'sum of odd index digits % 16 must be == 7'
+
+return True, ''</code></pre>
+    <p class="notopmargin next annotation" data-annotation="3" data-byid="true">
+        <strong>rbx == 1</strong> if the key is valid
+    </p>
+</section>
+
+<section>
+    <h2>Validation recap</h2>
+    <img src="images/validate-checks.svg" style="margin-left: 70px; margin-top: 50px; max-width: 650px;" alt="validation recap">
+</section>
+
+<section>
+    <h2>Z3</h2>
+    <ul>
+        <li class="next">A theorem prover/SMT solver from Microsoft Research.</li>
+        <li class="next">If a problem can be expressed as a system of equations/inequalities (predicates)&hellip;</li>
+        <li class="next">&hellip;Z3 can try and find a solution.</li>
+    </ul>
+</section>
+
+<section>
+    <h2><code style="font-weight: normal;">keygen-z3.py</code></h2>
+    <pre style="max-height: 350px;"><code class="python">import md5
+import struct
+from z3 import *
+
+
+def get_email_hash(email):
+    """
+    md5 the email address, keeps the low 32 bits of the digest
+    returns the stringified hash
+    """
+    m = md5.new()
+    m.update(email)
+    digest = m.digest()
+    email_hash = struct.unpack('I', digest[0:4])[0]
+    return "%u" % email_hash
+
+
+def keygen(email):
+    num_digits = 24
+    solver = Solver()
+    <mark data-annotation="1">d</mark> = Ints(' '.join(["d%d" %i for i in range(num_digits)]))
+
+    for i in range(num_digits):
+        <mark data-annotation="2">solver.add(d[i] >= 0, d[i] <= 9)</mark>
+
+    email_hash = get_email_hash(email)
+    for i in range(len(email_hash)):
+        <mark data-annotation="3">solver.add(d[i] == int(email_hash[i]))</mark>
+
+    <mark data-annotation="4">solver.add(d[10] + d[11] + d[12] + d[13] + d[14] == 21)</mark>
+    <mark data-annotation="4">solver.add(d[15] * d[16] * d[17] * d[18] * d[19] == 480)</mark>
+
+    if <mark data-annotation="5">solver.check() == sat</mark>:
+        model = solver.model()
+        for i in range(20):
+            solver.add(d[i] == model.eval(d[i]))
+    else:
+        print 'no valid code found :('
+
+    digits_sum_even = reduce(lambda a,b: a+b, d[0:len(d):2])
+    <mark data-annotation="6">solver.add(digits_sum_even % 16 == 3)</mark>
+
+    digits_sum_odd = reduce(lambda a,b: a+b, d[1:len(d):2])
+    <mark data-annotation="6">solver.add(digits_sum_odd % 16 == 7)</mark>
+
+    if solver.check() == sat:
+        model = solver.model()
+        print 'email: ' + email
+        print 'code : ' + ''.join([str(model[d[i]]) for i in range(num_digits)])
+        print
+    else:
+        print 'no valid code found :('
+
+if __name__ == '__main__':
+    keygen('a@b.com')
+    keygen('example@example.com')
+    keygen('someuser@somedomain.net')</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true">
+        an array of 24 Symbolic Integers, the digits in the <strong>key</strong>
+    </p>
+    <p class="notopmargin next annotation" data-annotation="2" data-byid="true">
+        every digit is constrained to lie between <strong>0</strong> and <strong>9</strong>
+    </p>
+    <p class="notopmargin next annotation" data-annotation="3" data-byid="true">
+        key must start with the truncated/stringified hash
+    </p>
+    <p class="notopmargin next annotation" data-annotation="4" data-byid="true">
+        "magic" sum/product
+    </p>
+    <p class="notopmargin next annotation" data-annotation="5" data-byid="true">
+        helping Z3 by separately solving this part
+    </p>
+    <p class="notopmargin next annotation" data-annotation="6" data-byid="true">
+       add constraints for the remaining two checksums
+    </p>
+    <p class="notopmargin next annotation" data-annotation="7" data-byid="true">
+       Let's try it out&hellip;
+    </p>
+</section>
+
+<section>
+    <h2>angr</h2>
+    <ul>
+        <li class="next">Combines a system emulator with a constraint solver.</li>
+        <li class="next">Can "explore" a binary, tracking all the possible execution <strong>paths</strong>.</li>
+        <li class="next">Paths can be pruned depending on constraints supplied by the user or figured out by <strong>angr</strong> itself.</li>
+    </ul>
+</section>
+
+<section>
+    <h2><code style="font-weight: normal;">keygen-angr.py</code></h2>
+    <pre style="max-height: 350px;"><code class="python">import unicorn
+import simuvex
+import angr
+import md5
+
+def email_hash(email):
+    m = md5.new()
+    m.update(email)
+    return m.digest()
+
+VALIDATE_FUNCTION_ADDR = 0x100001f00
+EMAIL = "a@b.com\x00"
+EMAIL_HASH = <mark data-annotation="1">email_hash(EMAIL.rstrip(b'\0'))</mark>
+KEY_NUM_DIGITS = 24
+
+def <mark data-annotation="2">cc_md5</mark>(state):
+    # rdx "md" for method imp___stubs__CC_MD5
+    state.memory.store(state.regs.rdx, state.se.BVV(EMAIL_HASH, len(EMAIL_HASH)*8))
+
+def <mark data-annotation="2">strlen</mark>(state):
+    buff = state.se.any_str(state.memory.load(state.regs.rdi, 1024))
+    term_idx = buff.find(b'\0')
+    state.regs.rax = term_idx
+
+def <mark data-annotation="2">snprintf</mark>(state):
+    # rdi       argument #1 for method imp___stubs____snprintf_chk
+    # esi       argument #2 for method imp___stubs____snprintf_chk
+    # edx       argument #3 for method imp___stubs____snprintf_chk
+    # ecx       argument #4 for method imp___stubs____snprintf_chk
+    # r8  "%u", argument #5 for method imp___stubs____snprintf_chk
+    # r9d       [rbp+var_30]    md5 hash
+    <mark data-annotation="3">assert state.se.any_str(state.memory.load(state.regs.r8, 2)) == '%u'</mark>
+    string = "%u\x00" % state.se.any_int(state.regs.r9)
+    string_bvv = state.se.BVV(string, len(string) * 8)
+    state.memory.store(state.regs.rdi, string_bvv)
+
+def <mark data-annotation="4">strncmp_copy_hash</mark>(state):
+    n = state.regs.rdx
+    s2 = state.se.any_str(state.memory.load(state.regs.rsi, n)).rstrip(b'\0')
+    string_bvv = state.se.BVV(s2, len(s2) * 8)
+    state.memory.store(state.regs.rdi, string_bvv)
+
+    s1 = state.se.any_str(state.memory.load(state.regs.rdi, n)).rstrip(b'\0')
+    s2 = state.se.any_str(state.memory.load(state.regs.rsi, n)).rstrip(b'\0')
+    if s1 == s2:
+        state.regs.eax = 0
+    else:
+        state.regs.eax = 1
+
+
+<mark data-annotation="5">p</mark> = angr.Project('CrackMe.app/Contents/MacOS/CrackMe', load_options={'auto_load_libs':False})
+
+state = p.factory.blank_state(addr=<mark data-annotation="6">VALIDATE_FUNCTION_ADDR</mark>,
+                              remove_options={simuvex.o.LAZY_SOLVES})
+
+# (lldb) expression -f p -- (char*)$rdi
+# (char *) $75 = 0x0000000100d3d120 "a@b.com"
+EMAIL_ADDR = 0x100d3d120
+email = state.se.<mark data-annotation="7">BVV</mark>(EMAIL, len(EMAIL) * 8)
+state.memory.store(EMAIL_ADDR, email)
+
+# (lldb) expression -f p -- (char*)$rsi
+# (char *) $76 = 0x0000000100d23d40 "54321"
+KEY_ADDR=0x100d23d40
+key = []
+for i in xrange(0, KEY_NUM_DIGITS + 1):
+    b = state.se.<mark data-annotation="8">BVS</mark>('key%d' % i, 8)
+    key.append(b)
+    state.memory.store(KEY_ADDR + i, key[-1])
+    state.add_constraints(b >= ord('0'), b <= ord('9'))
+state.memory.store(KEY_ADDR + KEY_NUM_DIGITS, state.se.BVV(b'\0', 8))
+
+# 0x100001f2f <+47>:  e8 fa 19 00 00  callq  0x10000392e  ; symbol stub for: CC_MD5
+p.hook(0x100001f2f, cc_md5, length=5)
+
+# 0000000100001f21         call       imp___stubs__strlen
+# 0000000100001f5e         call       imp___stubs__strlen
+# 0000000100001f74         call       imp___stubs__strlen
+p.<mark data-annotation="9">hook</mark>(0x100001f21, strlen, length=5)
+p.hook(0x100001f5e, strlen, length=5)
+p.hook(0x100001f74, strlen, length=5)
+
+# 0000000100001f56         call       imp___stubs____snprintf_chk
+p.hook(0x100001f56, snprintf, length=5)
+
+# 0000000100001f82         call       imp___stubs__strncmp
+p.hook(0x100001f82, strncmp_copy_hash, length=5)
+
+# 000000010000204a         call       imp___stubs____stack_chk_fail
+p.hook(0x10000204a, lambda: None, length=5)
+
+state.regs.rdi=EMAIL_ADDR
+state.regs.rsi=KEY_ADDR
+path = p.factory.path(state)
+
+pg = p.factory.path_group(path)
+pg.<mark data-annotation="10">explore</mark>(find=<mark data-annotation="11">0x100002033</mark>, avoid=(<mark data-annotation="11">0x100002037</mark>,<mark data-annotation="11">0x100002035</mark>))
+
+<mark data-annotation="12">assert len(pg.found) == 1</mark>
+
+# We are @ 0x100002033, but we also want bl (the return value to be non-zero)
+#   000000010000202c         cmp        rax, 0x7
+#   0000000100002030         sete       bl
+# ->0000000100002033         jmp        loc_100002037
+
+found = pg.found[0]
+
+# ipdb> <mark data-annotation="13">found.state.regs.bl</mark>
+# &lt;BV8 0#7 .. (if (key11_12_8[3:0] == __add__(9, (15 * key13_14_8[3:0]), (15 * key15_16_8[3:0]),
+#                 (15 * key17_18_8[3:0]), (15 * key19_20_8[3:0]), (15 * key21_22_8[3:0]),
+#                 (15 * key23_24_8[3:0]))) <mark data-annotation="14">then 1 else 0</mark>)&gt;
+
+found.state.add_constraints(<mark data-annotation="15">found.state.regs.bl != 0</mark>)
+pg = p.factory.path_group(found)
+pg.explore(find=0x100002037)
+
+assert len(pg.found) == 1
+found = pg.found[0]
+
+# ipdb> found.state.memory.load(KEY_ADDR, KEY_NUM_DIGITS)
+# <BV192 0x33383934343432353439#80 .. key10_11_8 .. key11_12_8 .. key12_13_8 .. key13_14_8 .. key14_15_8 .. key15_16_8 .. key16_17_8 .. key17_18_8 .. key18_19_8 .. key19_20_8 .. key20_21_8 .. key21_22_8 .. key22_23_8 .. key23_24_8>
+# ipdb> found.state.se.any_str(found.state.memory.load(KEY_ADDR, KEY_NUM_DIGITS))
+# '389444254990075435188938'
+# ipdb>
+
+print 'email: ' + EMAIL
+print 'code : ' + <mark data-annotation="16">found.state.se.any_str(found.state.memory.load(KEY_ADDR, KEY_NUM_DIGITS))</mark>
+print</code></pre>
+    <p class="notopmargin next annotation" data-annotation="1" data-byid="true">
+        "raw" hash, not truncated, not stringified
+    </p>
+    <p class="notopmargin next annotation" data-annotation="2" data-byid="true">
+        reimplement the library functions used by <strong>validate(email,key)</strong>
+    </p>
+    <p class="notopmargin next annotation" data-annotation="3" data-byid="true">
+        partial reimplementation, only <strong>%u</strong> is supported
+    </p>
+    <p class="notopmargin next annotation" data-annotation="4" data-byid="true">
+        Cheating: before comparing <strong>s1</strong> with <strong>s2</strong>, I copy <strong>s2</strong> into <strong>s1</strong>. The comparison will always succeed.
+    </p>
+    <p class="notopmargin next annotation" data-annotation="5" data-byid="true">
+        <strong>angr</strong> can load a Mach-O executable directly
+    </p>
+    <p class="notopmargin next annotation" data-annotation="6" data-byid="true">
+        start at <strong>0x100001f00</strong> and setup the environment for the <strong>validate(email,key)</strong> call
+    </p>
+    <p class="notopmargin next annotation" data-annotation="7" data-byid="true">
+        a <strong>concrete</strong> bitvector holds the <strong>email</strong>
+    </p>
+    <p class="notopmargin next annotation" data-annotation="8" data-byid="true">
+        model the key as a constrained array of <strong>symbolic</strong> characters
+    </p>
+    <p class="notopmargin next annotation" data-annotation="9" data-byid="true">
+        install the hooks
+    </p>
+    <p class="notopmargin next annotation" data-annotation="10" data-byid="true">
+        Setup the inputs to <strong>validate(email,key)</strong> and go!
+    </p>
+    <p class="notopmargin next annotation" data-annotation="11" data-byid="true">
+        ask the explorer to reach a certain location, while avoiding the "return false" branches
+    </p>
+    <p class="notopmargin next annotation" data-annotation="12" data-byid="true">
+        one path leading to the desired location is found
+    </p>
+    <p class="notopmargin next annotation" data-annotation="13" data-byid="true">
+        note the symbolic expression for <strong>bl</strong>
+    </p>
+    <p class="notopmargin next annotation" data-annotation="14" data-byid="true">
+        the outcome of the function isn't decided yet, it can still be <strong>0</strong> or <strong>1</strong>
+    </p>
+    <p class="notopmargin next annotation" data-annotation="15" data-byid="true">
+        so we constraint <strong>bl != 0</strong> and explore until the end
+    </p>
+    <p class="notopmargin next annotation" data-annotation="16" data-byid="true">
+        Did it work?
+    </p>
+</section>
+
+<section class="chapter">
+    <h1 style="margin-top: 80px;">Questions?</h1>
+    <video alt="dog space confused zero gravity i have no idea what im doing GIF" src="images/I-have-no-idea-what-I-am-doing.mp4" autoplay="" loop="" playsinline="" style="margin-left: 200px; max-width: 400px;"></video>
+</section>
+
+<section class="chapter">
+    <h1><strong>Thanks!</strong></h1>
+</section>
+
+<!-- Style -->
+
+<link href='http://fonts.googleapis.com/css?family=Oswald' rel='stylesheet'>
+
+<style>
+  html, .view body { background-color: black; counter-reset: slideidx; }
+  body, .view section {
+    background-color: #1C1C1C;
+    color: white;
+    font-family: 'Oswald', arial, serif;
+  }
+
+  section, .view head > title {
+      font-size: 2rem;
+  }
+
+  .view section:after {
+    counter-increment: slideidx;
+    content: counter(slideidx, decimal-leading-zero);
+    position: absolute; bottom: -80px; right: 100px;
+    color: white;
+  }
+
+  .view head > title {
+    color: white;
+    text-align: center;
+    margin: 1em 0 1em 0;
+  }
+
+  h1 {
+    margin: 120px 0 30px 0;
+    text-align: center;
+    font-size: 5rem;
+  }
+
+ .chapter h1 {
+     vertical-align: middle;
+     text-align: center;
+     display: block;
+ }
+
+  h2 {
+    margin: 70px 0px 0px 70px;
+    color: #FAE50B;
+  }
+
+  section > h3 {
+    margin: 50px 50px 40px 50px;
+    border-bottom: 0.1px solid;
+  }
+
+  pre {
+    overflow-x: hidden;
+    overflow-y: scroll;
+    font-size: 1.2rem;
+    margin: 0 75px 0 75px;
+    width:80%
+  }
+
+  ul, ol {
+      margin: 40px 100px 0 100px;
+      list-style-type: none;
+  }
+
+  ul li:before {
+      content: '\2022 ';
+      color: #333333;
+      float: left;
+      margin: 0 0 0 -1em;
+      width: 1em;
+  }
+
+  ul ul {
+      margin-top: 0px;
+  }
+
+  li > ul, ol {
+      margin: 0 0 15px 50px;
+      list-style-image: none; /* in case parent list has some */
+  }
+
+ li {
+     margin-bottom: 10px;
+ }
+
+  mark.next:not([active]) {
+    visibility: visible; /* override the default behavior where next is hidden */
+    background-color: inherit; /* and disable highlighting instead */
+  }
+
+  p {
+    margin: 75px 75px 0 75px;
+    font-size: 3rem;
+  }
+
+  p.annotation {
+    font-size: inherit;
+  }
+
+  table {
+    margin: auto;
+    font-size:2.5rem;
+    text-align: center;
+  }
+
+  blockquote {
+    height: 100%;
+    background-color: black;
+    color: white;
+    font-size: 3.75rem;
+    padding: 50px;
+  }
+  blockquote:before {
+    content: open-quote;
+  }
+  blockquote:after {
+    content: close-quote;
+  }
+
+  /* Figures are displayed full-page, with the caption
+     on top of the image/video */
+  figure {
+    background-color: black;
+    width: 100%;
+    height: 100%;
+  }
+  figure > * {
+    position: absolute;
+  }
+  figure > img, figure > video {
+    width: 100%; height: 100%;
+  }
+  figcaption {
+    margin: 70px;
+    font-size: 3rem;
+  }
+
+  img {
+      max-width: 600px;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+  }
+
+  header {
+    background-color: #F3F4F8;
+    border-bottom: 1px solid #CCC;
+  }
+
+  footer {
+    font-size: 1.5rem;
+    color: #333;
+    background-color: #1C1C1C;
+    padding-bottom: 4px; /* remember progress bar */
+  }
+
+  section footer {
+    padding: 10px;
+  }
+
+  /* Transition effect */
+  /* Feel free to change the transition effect for original
+     animations. See here:
+     https://developer.mozilla.org/en/CSS/CSS_transitions
+     How to use CSS3 Transitions: */
+  /* section {
+    transition: left 400ms linear 0s;
+  } */
+  .view section {
+    transition: none;
+  }
+
+  .view section[aria-selected] {
+    border: 5px red solid;
+  }
+
+@media screen {
+  /* Before */
+  section { left: -150%; }
+  /* Now */
+  section[aria-selected] { left: 0; }
+  /* After */
+  section[aria-selected] ~ section { left: +150%; }
+}
+
+  /* The progressbar, at the bottom of the slides, show the global
+     progress of the presentation. */
+  #progress-bar {
+    height: 4px;
+    background: #AAA;
+    visibility: hidden;
+  }
+
+  /* For some reason, plugging in an external monitor/projector causes some ugly unstyled
+     scrollbars to appear */
+  code::-webkit-scrollbar-thumb {
+    background-color: #333;
+    width: 6px;
+    height: 6px;
+  }
+
+  code::-webkit-scrollbar {
+    background-color: transparent;
+    width: 6px;
+    height: 6px;
+  }
+  pre::-webkit-scrollbar-thumb {
+    background-color: #333;
+    width: 6px;
+    height: 6px;
+  }
+  pre::-webkit-scrollbar {
+    background-color: transparent;
+    width: 6px;
+    height: 6px;
+  }
+</style>
+
+<!-- {{{{ dzslides core
+#
+#
+#     __  __  __       .  __   ___  __
+#    |  \  / /__` |    | |  \ |__  /__`
+#    |__/ /_ .__/ |___ | |__/ |___ .__/ core :€
+#
+#
+# The following block of code is not supposed to be edited.
+# But if you want to change the behavior of these slides,
+# feel free to hack it!
+#
+-->
+
+<div id="progress-bar"></div>
+
+<!-- Default Style -->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [role="note"] { display: none; }
+  html {
+    font-size: 16px;
+  }
+  body {
+    width: 800px; height: 600px;
+    position: absolute; top: 50%; left: 50%;
+    overflow: hidden;
+    display: none;
+  }
+  .view body {
+    position: static;
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    display: inline-block;
+    overflow: visible; overflow-x: hidden;
+    /* undo Dz.onresize */
+    transform: none !important;
+  }
+  .view head, .view head > title { display: block }
+  section {
+    position: absolute;
+    pointer-events: none;
+    width: 100%; height: 100%;
+  }
+  .view section {
+    pointer-events: auto;
+    position: static;
+    width: 800px; height: 600px;
+    margin: -150px -200px;
+    float: left;
+
+    transform: scale(.4);
+  }
+  .view section > * { pointer-events: none; }
+  section[aria-selected] { pointer-events: auto; }
+  html { overflow: hidden; }
+  html.view { overflow: visible; }
+  body.loaded { display: block; }
+  .next:not([active]) {visibility: hidden; }
+  .next.annotation:not([active]) { display: none; }
+  #progress-bar{
+    bottom: 0;
+    position: absolute;
+    transition: width 400ms linear 0s;
+  }
+  .view #progress-bar {
+    display: none;
+  }
+  header {
+    text-align: right;
+    position: absolute;
+    top: 0;
+    width: 100%;
+  }
+  footer {
+    text-align: center;
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+  }
+  .view header { display: none; }
+  .view footer { display: none; }
+
+  footer a {
+    color: #333;
+    text-decoration: none;
+  }
+
+  footer a:hover {
+    color: white;
+  }
+
+ strong {
+     color: #FF0066;
+ }
+
+ .notopmargin {
+     margin-top: 0px;
+ }
+
+ pre mark {
+     background-color: transparent;
+     color: inherit;
+ }
+
+ pre mark[active] {
+     border: 2px solid #FF0066;
+     border-radius: 5px;
+ }
+
+ .footerbullet {
+     vertical-align: -0.2rem;
+ }
+
+@media print {
+  section {
+    transition: none;
+    transform: none;
+    position: static;
+    page-break-inside: avoid;
+  }
+  body { overflow: visible; }
+  #progress-bar{ display:none; }
+}
+
+/*
+   **************************************
+   Uncomment the following for 16:9 slides
+   **************************************
+
+  html { font-size: 12px; }
+  body { height: 450px; }
+  .view section {
+    height: 450px;
+    margin: -140px -200px;
+    transform: scale(.3);
+  }
+*/
+</style>
+
+<script src="js/highlight.min.js"></script>
+<script src="js/cpp.min.js"></script>
+<script src="js/shell.min.js"></script>
+<script src="js/x86asm.min.js"></script>
+<script src="js/python.min.js"></script>
+<link rel="stylesheet" href="css/atom-one-dark.min.css">
+<script>hljs.initHighlightingOnLoad();</script>
+<script>
+  var Dz = {
+    remoteWindows: [],
+    idx: -1,
+    step: 0,
+    html: null,
+    slides: null,
+    progressBar : null,
+    params: {
+      autoplay: "1"
+    }
+  };
+
+  Dz.init = function() {
+    document.body.className = "loaded";
+    this.slides = Array.prototype.slice.call($$("body > section"));
+    this.progressBar = $("#progress-bar");
+    this.html = document.body.parentNode;
+    this.setupParams();
+    this.onhashchange();
+    this.setupTouchEvents();
+    this.onresize();
+    this.setupView();
+  }
+
+  Dz.setupParams = function() {
+    var p = window.location.search.substr(1).split('&');
+    p.forEach(function(e, i, a) {
+      var keyVal = e.split('=');
+      Dz.params[keyVal[0]] = decodeURIComponent(keyVal[1]);
+    });
+  // Specific params handling
+    if (!+this.params.autoplay)
+      $$.forEach($$("video"), function(v){ v.controls = true });
+  }
+
+  Dz.onkeydown = function(aEvent) {
+    // Don't intercept keyboard shortcuts
+    if (aEvent.altKey
+      || aEvent.ctrlKey
+      || aEvent.metaKey
+      || aEvent.shiftKey) {
+      return;
+    }
+    if ( aEvent.keyCode == 37 // left arrow
+      || aEvent.keyCode == 33 // page up
+    ) {
+      aEvent.preventDefault();
+      this.back();
+    }
+    if (aEvent.keyCode == 38) { // up arrow
+      aEvent.preventDefault();
+      this.backStep();
+    }
+    if ( aEvent.keyCode == 39 // right arrow
+      || aEvent.keyCode == 40 // down arrow
+      || aEvent.keyCode == 34 // page down
+    ) {
+      aEvent.preventDefault();
+      this.forward();
+    }
+    if (aEvent.keyCode == 35) { // end
+      aEvent.preventDefault();
+      this.goEnd();
+    }
+    if (aEvent.keyCode == 36) { // home
+      aEvent.preventDefault();
+      this.goStart();
+    }
+    if (aEvent.keyCode == 32) { // space
+      aEvent.preventDefault();
+      this.toggleContent();
+    }
+    if (aEvent.keyCode == 70) { // f
+      aEvent.preventDefault();
+      this.goFullscreen();
+    }
+    if (aEvent.keyCode == 79    //o
+     || aEvent.keyCode == 27    //Esc
+    ) {
+      aEvent.preventDefault();
+      this.toggleView();
+    }
+  }
+
+  /* Touch Events */
+
+  Dz.setupTouchEvents = function() {
+    var orgX, newX;
+    var tracking = false;
+
+    var db = document.body;
+    db.addEventListener("touchstart", start.bind(this), false);
+    db.addEventListener("touchmove", move.bind(this), false);
+
+    function start(aEvent) {
+      aEvent.preventDefault();
+      tracking = true;
+      orgX = aEvent.changedTouches[0].pageX;
+    }
+
+    function move(aEvent) {
+      if (!tracking) return;
+      newX = aEvent.changedTouches[0].pageX;
+      if (orgX - newX > 100) {
+        tracking = false;
+        this.forward();
+      } else {
+        if (orgX - newX < -100) {
+          tracking = false;
+          this.back();
+        }
+      }
+    }
+  }
+
+  Dz.setupView = function() {
+    document.body.addEventListener("click", function ( e ) {
+      if (!Dz.html.classList.contains("view")) return;
+      if (!e.target || e.target.nodeName != "SECTION") return;
+
+      Dz.html.classList.remove("view");
+      Dz.setCursor(Dz.slides.indexOf(e.target) + 1);
+    }, false);
+  }
+
+  /* Adapt the size of the slides to the window */
+
+  Dz.onresize = function() {
+    var db = document.body;
+    var sx = db.clientWidth / window.innerWidth;
+    var sy = db.clientHeight / window.innerHeight;
+    var transform = "scale(" + (1/Math.max(sx, sy)) + ")";
+    db.style.transform = transform;
+    db.style.marginTop = -db.clientHeight / 2 + "px";
+    db.style.marginLeft = -db.clientWidth / 2 + "px";
+  }
+
+
+  Dz.getNotes = function(aIdx) {
+    var s = $("section:nth-of-type(" + aIdx + ")");
+    var d = s.$("[role='note']");
+    return d ? d.innerHTML : "";
+  }
+
+  Dz.onmessage = function(aEvent) {
+    var argv = aEvent.data.split(" "), argc = argv.length;
+    argv.forEach(function(e, i, a) { a[i] = decodeURIComponent(e) });
+    var win = aEvent.source;
+    if (argv[0] === "REGISTER" && argc === 1) {
+      this.remoteWindows.push(win);
+      this.postMsg(win, "REGISTERED", document.title, this.slides.length);
+      this.postMsg(win, "CURSOR", this.idx + "." + this.step);
+      return;
+    }
+    if (argv[0] === "BACK" && argc === 1)
+      this.back();
+    if (argv[0] === "BACKSTEP" && argc === 1)
+      this.backStep();
+    if (argv[0] === "FORWARD" && argc === 1)
+      this.forward();
+    if (argv[0] === "START" && argc === 1)
+      this.goStart();
+    if (argv[0] === "END" && argc === 1)
+      this.goEnd();
+    if (argv[0] === "TOGGLE_CONTENT" && argc === 1)
+      this.toggleContent();
+    if (argv[0] === "SET_CURSOR" && argc === 2)
+      window.location.hash = "#" + argv[1];
+    if (argv[0] === "GET_CURSOR" && argc === 1)
+      this.postMsg(win, "CURSOR", this.idx + "." + this.step);
+    if (argv[0] === "GET_NOTES" && argc === 1)
+      this.postMsg(win, "NOTES", this.getNotes(this.idx));
+  }
+
+  Dz.toggleContent = function() {
+    // If a Video is present in this new slide, play it.
+    // If a Video is present in the previous slide, stop it.
+    var s = $("section[aria-selected]");
+    if (s) {
+      var video = s.$("video");
+      if (video) {
+        if (video.ended || video.paused) {
+          video.play();
+        } else {
+          video.pause();
+        }
+      }
+    }
+  }
+
+  Dz.setCursor = function(aIdx, aStep) {
+    // If the user change the slide number in the URL bar, jump
+    // to this slide.
+    aStep = (aStep != 0 && typeof aStep !== "undefined") ? "." + aStep : ".0";
+    window.location.hash = "#" + aIdx + aStep;
+  }
+
+  Dz.onhashchange = function() {
+    var cursor = window.location.hash.split("#"),
+        newidx = 1,
+        newstep = 0;
+    if (cursor.length == 2) {
+      newidx = ~~cursor[1].split(".")[0];
+      newstep = ~~cursor[1].split(".")[1];
+      if (newstep > Dz.slides[newidx - 1].$$('.next').length) {
+        newstep = 0;
+        newidx++;
+      }
+    }
+    this.setProgress(newidx, newstep);
+    if (newidx != this.idx) {
+      this.setSlide(newidx);
+    }
+    if (newstep != this.step) {
+      this.setIncremental(newstep);
+    }
+    for (var i = 0; i < this.remoteWindows.length; i++) {
+      this.postMsg(this.remoteWindows[i], "CURSOR", this.idx + "." + this.step);
+    }
+  }
+
+  Dz.back = function() {
+    if (this.idx == 1) {
+      return;
+    }
+    this.setCursor(this.idx - 1,
+                   this.findHighestActiveIncrementalStep(this.slides[this.idx - 2]));
+  }
+
+  Dz.backStep = function() {
+    if (this.idx == 1) {
+      return;
+    }
+    var totalSteps = this.slides[this.idx - 1].$$('.next').length;
+    if (totalSteps == 0) {
+      this.back();
+    } else {
+      var actives = this.slides[this.idx - 1].$$('.next[active]');
+      if (actives.length == 0) {
+        this.setCursor(this.idx - 1,
+                       this.findHighestActiveIncrementalStep(this.slides[this.idx - 2]));
+      } else {
+        // deactivate the last active incremental
+        var lastIncremental = actives[actives.length - 1];
+        lastIncremental.removeAttribute('active');
+        this.setCursor(this.idx, actives.length - 1);
+        // if the last incremental is an annotation, activate the second last annotation
+        if (lastIncremental.classList.contains('annotation')) {
+          var incrementals = this.getSortedIncrementals(this.slides[this.idx - 1]);
+          var found = undefined;
+          for (var i=0; i < incrementals.length; i++) {
+            // find the incremental we just deactivated
+            if (incrementals[i] == lastIncremental) {
+              found = i;
+              break;
+            }
+          }
+          if (found != undefined) {
+            // find the second last annotation
+            var secondLastAnnotation = undefined;
+            var secondLastAnnotationIndex = undefined;
+            for (var i=0; i < found; i++) {
+              if (incrementals[i].classList.contains('annotation')) {
+                secondLastAnnotation = incrementals[i];
+                secondLastAnnotationIndex = i;
+              }
+            }
+            if (secondLastAnnotation != undefined) {
+              secondLastAnnotation.setAttribute('active', true);
+              this.setCursor(this.idx, secondLastAnnotationIndex + 1);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  Dz.findHighestActiveIncrementalStep = function(slide) {
+    var incrementals = this.getSortedIncrementals(slide);
+    var foundStep = 0;
+    for (var i = 0; i < incrementals.length; i++) {
+      if(incrementals[i].getAttribute('active')) {
+        foundStep = i + 1;
+      }
+    }
+    return foundStep;
+  }
+
+  Dz.forward = function() {
+    if (this.idx >= this.slides.length &&
+        this.step >= this.slides[this.idx - 1].$$('.next').length) {
+        return;
+    }
+    if (this.html.classList.contains("view") ||
+        this.step >= this.slides[this.idx - 1].$$('.next').length) {
+      this.setCursor(this.idx + 1, this.findHighestActiveIncrementalStep(this.slides[this.idx]));
+    } else {
+      this.setCursor(this.idx, this.step + 1);
+    }
+  }
+
+  Dz.goStart = function() {
+    this.setCursor(1, 0);
+  }
+
+  Dz.goEnd = function() {
+    var lastIdx = this.slides.length;
+    var lastStep = this.slides[lastIdx - 1].$$('.next').length;
+    this.setCursor(lastIdx, lastStep);
+  }
+
+  Dz.toggleView = function() {
+    this.html.classList.toggle("view");
+
+    if (this.html.classList.contains("view")) {
+      $("section[aria-selected]").scrollIntoView(true);
+    }
+  }
+
+  Dz.setSlide = function(aIdx) {
+    this.idx = aIdx;
+    var old = $("section[aria-selected]");
+    var next = $("section:nth-of-type("+ this.idx +")");
+    if (old) {
+      old.removeAttribute("aria-selected");
+      var video = old.$("video");
+      if (video) {
+        video.pause();
+      }
+    }
+    if (next) {
+      next.setAttribute("aria-selected", "true");
+      if (this.html.classList.contains("view")) {
+        next.scrollIntoView();
+      } else {
+        var video = next.$("video");
+        if (video && !!+this.params.autoplay) {
+          video.play();
+        }
+      }
+    } else {
+      // That should not happen
+      this.idx = -1;
+      // console.warn("Slide doesn't exist.");
+    }
+  }
+
+  Dz.getSortedIncrementals = function(slide) {
+    //return Array.prototype.slice.call(slide.$$('.next')).sort(function(a, b) {
+    //  return Number(a.getAttribute('next-order')) - Number(b.getAttribute('next-order'));
+    //});
+     return slide.$$('.next');
+  }
+
+  Dz.setIncremental = function(aStep) {
+    this.step = aStep;
+    var incrementals = this.getSortedIncrementals(this.slides[this.idx - 1]);
+
+    // if the current step has an 'annotation' class, every other step must be hidden
+    var isAnnotation = incrementals[this.step - 1] && incrementals[this.step - 1].classList.contains('annotation');
+    var annotationId = isAnnotation && Number(incrementals[this.step - 1].getAttribute('data-annotation'));
+    var byId = isAnnotation && Boolean(incrementals[this.step - 1].getAttribute('data-byid'));
+    for (var i = 0; i < this.step; i++) {
+      next = incrementals[i];
+      if (next) {
+        if (isAnnotation && i != (this.step -1)) {
+            next.removeAttribute('active');
+        } else {
+            next.setAttribute('active', true);
+        }
+      }
+    }
+    // if the current (annotation) step has a data-annotation attribute, activate the corresponding <mark>
+    var toggler = function (mark, markIndex, annotationId, byId) {
+      var pred;
+      if (!byId) {
+        pred = function() { return annotationId == (markIndex + 1) };
+      } else {
+        var markId = mark.getAttribute("data-annotation");
+        markId = markId && Number(markId);
+        pred = function() { return annotationId == markId };
+      }
+      if (pred()) {
+        mark.setAttribute('active', true);
+      } else {
+        mark.removeAttribute('active');
+      }
+    }
+    if (isAnnotation && annotationId) {
+      var marks = this.slides[this.idx - 1].$$('pre mark');
+      for (var i = 0; i < marks.length; i++) {
+        toggler(marks[i], i, annotationId, byId);
+      }
+    }
+    // deactivate all the <marks>
+    if (!isAnnotation) {
+      var marks = this.slides[this.idx - 1].$$('pre mark');
+      for (var i = 0; i < marks.length; i++) {
+          marks[i].removeAttribute('active');
+      }
+    }
+    if (!next) {
+      this.setCursor(this.idx, 0);
+    }
+    return next;
+  }
+
+  Dz.goFullscreen = function() {
+    var html = $('html'),
+        requestFullscreen = html.requestFullscreen || html.requestFullScreen || html.mozRequestFullScreen || html.webkitRequestFullScreen;
+    if (requestFullscreen) {
+      requestFullscreen.apply(html);
+    }
+  }
+  
+  Dz.setProgress = function(aIdx, aStep) {
+    var slide = $("section:nth-of-type("+ aIdx +")");
+    if (!slide)
+      return;
+    var steps = slide.$$('.next').length + 1,
+        slideSize = 100 / (this.slides.length - 1),
+        stepSize = slideSize / steps;
+    this.progressBar.style.width = ((aIdx - 1) * slideSize + aStep * stepSize) + '%';
+  }
+  
+  Dz.postMsg = function(aWin, aMsg) { // [arg0, [arg1...]]
+    aMsg = [aMsg];
+    for (var i = 2; i < arguments.length; i++)
+      aMsg.push(encodeURIComponent(arguments[i]));
+    aWin.postMessage(aMsg.join(" "), "*");
+  }
+  
+  function init() {
+    Dz.init();
+    window.onkeydown = Dz.onkeydown.bind(Dz);
+    window.onresize = Dz.onresize.bind(Dz);
+    window.onhashchange = Dz.onhashchange.bind(Dz);
+    window.onmessage = Dz.onmessage.bind(Dz);
+  }
+
+  window.onload = init;
+
+  // Helpers
+  if (!Function.prototype.bind) {
+    Function.prototype.bind = function (oThis) {
+
+      // closest thing possible to the ECMAScript 5 internal IsCallable
+      // function 
+      if (typeof this !== "function")
+      throw new TypeError(
+        "Function.prototype.bind - what is trying to be fBound is not callable"
+      );
+
+      var aArgs = Array.prototype.slice.call(arguments, 1),
+          fToBind = this,
+          fNOP = function () {},
+          fBound = function () {
+            return fToBind.apply( this instanceof fNOP ? this : oThis || window,
+                   aArgs.concat(Array.prototype.slice.call(arguments)));
+          };
+
+      fNOP.prototype = this.prototype;
+      fBound.prototype = new fNOP();
+
+      return fBound;
+    };
+  }
+
+  var $ = (HTMLElement.prototype.$ = function(aQuery) {
+    return this.querySelector(aQuery);
+  }).bind(document);
+
+  var $$ = (HTMLElement.prototype.$$ = function(aQuery) {
+    return this.querySelectorAll(aQuery);
+  }).bind(document);
+
+  $$.forEach = function(nodeList, fun) {
+    Array.prototype.forEach.call(nodeList, fun);
+  }
+
+</script>
+<!-- vim: set fdm=marker: }}} -->
